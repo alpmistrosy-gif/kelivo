@@ -62,7 +62,11 @@ jobs:
       - name: Install iSH sandbox build dependencies
         shell: bash
         run: |
-          brew install meson ninja llvm lld
+          # iSH host fakefsify target is gated on libarchive (OpenMinis tools/meson.build).
+          # macOS runners don't expose it by default, causing ninja unknown target.
+          brew install meson ninja llvm lld libarchive pkg-config
+          export PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          pkg-config --modversion libarchive
           ios/sandbox/ensure_artifacts.sh
 
       - name: Build unsigned iPhone IPA with test-only history compactor
