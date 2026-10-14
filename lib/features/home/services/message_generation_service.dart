@@ -38,6 +38,7 @@ import 'ask_user_interaction_service.dart';
 import 'context_assembly.dart';
 import 'context_usage_service.dart';
 import 'message_builder_service.dart';
+import 'normal_turn_tool_history_compactor.dart';
 import 'tool_approval_service.dart';
 import '../utils/model_display_helper.dart';
 
@@ -327,6 +328,30 @@ class MessageGenerationService {
       workspaceContext: workspaceContext,
       conversationId: currentConversation?.id,
     );
+    // Test-only, Chat Completions first-request view. OpenAI's live tool
+    // follow-ups are built in chat_completions_api.dart and never revisit this
+    // method, so their call/result continuation remains byte-for-byte intact.
+    final onlyReadTestBrief = toolDefs.length == 1 &&
+        toolDefs.single['function'] is Map &&
+        (toolDefs.single['function'] as Map)['name'] == 'read_test_brief';
+    if (kind == ProviderKind.openai &&
+        cfg.useResponseApi != true &&
+        kEnableReadTestBriefHistoryCompaction &&
+        onlyReadTestBrief) {
+      final compacted = const NormalTurnToolHistoryCompactor()
+          .buildRequestMessages(
+            apiMessages,
+            const NormalTurnHistoryCompactionPolicy(
+              enabled: true,
+              fixtureMode: true,
+              currentToolContinuation: false,
+              allowedToolNames: {'read_test_brief'},
+            ),
+          );
+      apiMessages
+        ..clear()
+        ..addAll(compacted);
+    }
     return UnprocessedRequestContext(
       apiMessages: apiMessages,
       toolDefs: toolDefs,
