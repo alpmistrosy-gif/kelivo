@@ -1,0 +1,85 @@
+name: Kelivo iOS isolated Token POC (unsigned)
+
+on:
+  push:
+    branches:
+      - experiments/kelivo-normal-turn-poc
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kelivo-ios-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    if: github.ref == 'refs/heads/experiments/kelivo-normal-turn-poc'
+    runs-on: macos-latest
+    timeout-minutes: 65
+    steps:
+      - name: Checkout fork experiment branch
+        uses: actions/checkout@v4
+
+      - name: Check synthetic fixture patch guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'kEnableReadTestBriefHistoryCompaction' lib/features/home/services/message_generation_service.dart
+          grep -Fq 'NormalTurnToolHistoryCompactor' lib/features/home/services/normal_turn_tool_history_compactor.dart
+          grep -Fq "name != 'read_test_brief'" lib/features/home/services/normal_turn_tool_history_compactor.dart
+          grep -Fq 'defaultValue: false' lib/features/home/services/normal_turn_tool_history_compactor.dart
+
+      - name: Install Flutter matching upstream iOS build
+        uses: subosito/flutter-action@v2
+        with:
+          channel: master
+          cache: true
+
+      - name: Set empty fallback (no private API keys)
+        shell: bash
+        run: |
+          mkdir -p lib/secrets
+          printf 'const String siliconflowFallbackKey = "";\n' > lib/secrets/fallback.dart
+
+      - name: Resolve dependencies and run offline safety tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+          dart run test/features/home/services/normal_turn_tool_history_compactor_test.dart
+
+      - name: Cache iSH sandbox artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/sandbox/build
+            ios/sandbox/resources/alpine-rootfs.zip
+            ios/sandbox/resources/libvdso.so.elf
+          key: ${{ runner.os }}-${{ runner.arch }}-kelivo-ish-${{ hashFiles('ios/sandbox/build_ish.sh', 'ios/sandbox/ensure_artifacts.sh', 'ios/sandbox/patches/*.patch', 'ios/sandbox/prepare_alpine_rootfs.sh', 'ios/sandbox/resources/VERSION') }}
+
+      - name: Install iSH sandbox build dependencies
+        shell: bash
+        run: |
+          brew install meson ninja llvm lld
+          ios/sandbox/ensure_artifacts.sh
+
+      - name: Build unsigned iPhone IPA with test-only history compactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build ios --release --no-codesign \
+            --dart-define=KELIVO_TEST_ONLY_READ_TEST_BRIEF_HISTORY_COMPACTION=true
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -qr ../../../Kelivo_iOS_NormalTurnPOC_unsigned.ipa Payload
+
+      - name: Upload unsigned IPA as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kelivo-iOS-NormalTurnPOC-unsigned
+          path: Kelivo_iOS_NormalTurnPOC_unsigned.ipa
+          if-no-files-found: error
+          retention-days: 3
